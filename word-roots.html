@@ -1,0 +1,1415 @@
+<!--
+  Word Root Field Guide
+  =====================
+  A vocabulary tracker for 9th grade ELA — students log word roots and
+  migratory words they encounter in the wild, teachers manage the master list.
+  Built with plain HTML/CSS/JS + Supabase for the backend.
+
+  Version History
+  ---------------
+  v1.0   — Single-file localStorage version (no backend)
+  v1.1   — Supabase backend, single-classroom install
+  v1.2   — Source language fields, PIN complexity rules, Migratory Word rename
+  v1.3   — Migratory Words restructured; students can add migratory words;
+            scoreboard tab; EtymOnline links; CSV export; end-of-year wipe
+  v1.3.1 — Default password enforcement (pleasechangethis), warning banner,
+            password validation rules (min 12 chars, no placeholder words)
+  v1.3.2 — Required fields on inline log form (Your Word, Your Word's Meaning,
+            Found In); "Your Definition" renamed to "Your Word's Meaning";
+            teacher password now stored as a SHA-256 hash for security
+
+  Configuration
+  -------------
+  To install for a new classroom, change the two lines in the CONFIGURATION
+  block in the <script> section at the bottom of this file:
+    const SUPABASE_URL = 'your-project-url';
+    const SUPABASE_KEY = 'your-anon-public-key';
+  Then run the SQL setup script in your Supabase SQL editor.
+
+  Database Migrations
+  -------------------
+  See MIGRATIONS.md for the full database setup script and upgrade
+  instructions for each version. Always check MIGRATIONS.md before
+  updating to a new version of this file.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Word Root Field Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,600;1,8..60,300;1,8..60,400&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #1a1208; --ink-light: #3d2e0f;
+  --paper: #f5f0e8; --paper-dark: #e8dfc8; --paper-darker: #d9cdb0;
+  --accent: #7a3e1a; --accent-light: #c4703d; --accent-muted: #b8956a;
+  --green: #3a5c2e; --ruled: #d4c9a8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Source Serif 4', Georgia, serif;
+  background: #c8b89a;
+  background-image: radial-gradient(ellipse at 20% 50%, #b8a070 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, #d4c090 0%, transparent 50%);
+  min-height: 100vh; color: var(--ink); padding: 20px;
+}
+.book {
+  max-width: 1160px; margin: 0 auto; background: var(--paper); border-radius: 2px;
+  box-shadow: -4px 0 8px rgba(0,0,0,0.3), 4px 4px 20px rgba(0,0,0,0.4), inset -3px 0 6px rgba(0,0,0,0.1);
+  min-height: 90vh; position: relative; overflow: hidden;
+}
+.book::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 28px;
+  background: linear-gradient(to right, #8a6a3a, #b8956a 40%, transparent); z-index: 10;
+}
+.book-inner { padding: 0 40px 40px 52px; }
+.header { padding: 32px 0 16px; border-bottom: 2px solid var(--accent); }
+.header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.title-block h1 { font-family: 'Playfair Display', serif; font-size: 2.4rem; font-weight: 700; color: var(--accent); line-height: 1.1; letter-spacing: -0.5px; }
+.title-block .subtitle { font-family: 'Courier Prime', monospace; font-size: 0.75rem; color: var(--accent-muted); letter-spacing: 2px; text-transform: uppercase; margin-top: 4px; }
+.header-bird { font-size: 2.8rem; opacity: 0.6; transform: scaleX(-1); }
+.user-bar { display: flex; align-items: center; gap: 12px; padding: 8px 0 0; font-family: 'Courier Prime', monospace; font-size: 0.8rem; color: var(--ink-light); }
+.user-badge { background: var(--paper-dark); border: 1px solid var(--paper-darker); padding: 4px 12px; border-radius: 2px; font-weight: 700; color: var(--accent); }
+.tab-row { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 2px solid var(--ruled); margin-top: 20px; }
+.tab { font-family: 'Courier Prime', monospace; font-size: 0.75rem; letter-spacing: 1.5px; text-transform: uppercase; padding: 8px 18px; cursor: pointer; color: var(--accent-muted); border: 1px solid transparent; border-bottom: none; background: transparent; transition: all 0.15s; position: relative; bottom: -2px; }
+.tab:hover { color: var(--accent); }
+.tab.active { color: var(--accent); font-weight: 700; background: var(--paper); border-color: var(--ruled); border-bottom-color: var(--paper); }
+.screen { display: none; padding-top: 24px; }
+.screen.active { display: block; }
+
+/* LOADING */
+.loading-overlay { position: fixed; inset: 0; background: rgba(197,181,152,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; font-family: 'Courier Prime', monospace; font-size: 0.9rem; color: var(--accent); letter-spacing: 2px; flex-direction: column; gap: 12px; }
+.loading-spinner { width: 32px; height: 32px; border: 3px solid var(--paper-darker); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* FORMS */
+.login-wrap { max-width: 420px; margin: 60px auto; text-align: center; }
+.login-wrap .emblem { font-size: 4rem; margin-bottom: 16px; opacity: 0.5; }
+.login-wrap h2 { font-family: 'Playfair Display', serif; font-size: 1.6rem; color: var(--accent); margin-bottom: 6px; }
+.login-wrap p { font-size: 0.85rem; color: var(--accent-muted); margin-bottom: 28px; font-style: italic; }
+.field-group { text-align: left; margin-bottom: 16px; }
+.field-group label { display: block; font-family: 'Courier Prime', monospace; font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-muted); margin-bottom: 5px; }
+.field-group input, .field-group select, .field-group textarea { width: 100%; background: var(--paper-dark); border: 1px solid var(--paper-darker); border-bottom: 2px solid var(--accent-muted); padding: 9px 12px; font-family: 'Source Serif 4', serif; font-size: 0.95rem; color: var(--ink); outline: none; transition: border-color 0.15s; border-radius: 1px; }
+.field-group input:focus, .field-group select:focus, .field-group textarea:focus { border-bottom-color: var(--accent); background: #ede5cc; }
+.field-group textarea { resize: vertical; min-height: 70px; }
+.btn { font-family: 'Courier Prime', monospace; font-size: 0.8rem; letter-spacing: 2px; text-transform: uppercase; padding: 10px 24px; cursor: pointer; border: none; border-radius: 1px; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: var(--paper); }
+.btn-primary:hover { background: var(--ink-light); }
+.btn-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent-muted); }
+.btn-secondary:hover { background: var(--paper-dark); }
+.btn-danger { background: transparent; color: #8a2020; border: 1px solid #c46060; font-size: 0.7rem; padding: 5px 12px; }
+.btn-danger:hover { background: #f5e8e8; }
+.btn-sm { font-size: 0.7rem; padding: 6px 14px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.error-msg { color: #8a2020; font-size: 0.8rem; font-style: italic; margin-top: 8px; font-family: 'Courier Prime', monospace; }
+.toggle-link { font-size: 0.8rem; color: var(--accent-muted); margin-top: 16px; cursor: pointer; text-decoration: underline; font-style: italic; }
+.toggle-link:hover { color: var(--accent); }
+
+/* CHECKLIST */
+.section-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+.section-header h2 { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: var(--accent); }
+.count-badge { font-family: 'Courier Prime', monospace; font-size: 0.7rem; letter-spacing: 1px; color: var(--accent-muted); border: 1px solid var(--ruled); padding: 2px 10px; border-radius: 10px; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+.filters select, .filters input { font-family: 'Courier Prime', monospace; font-size: 0.75rem; padding: 5px 10px; background: var(--paper-dark); border: 1px solid var(--paper-darker); color: var(--ink); border-radius: 1px; }
+.filters label { font-family: 'Courier Prime', monospace; font-size: 0.7rem; letter-spacing: 1px; color: var(--accent-muted); text-transform: uppercase; }
+.checklist { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.checklist thead tr { background: var(--ink); color: var(--paper); }
+.checklist thead th { font-family: 'Courier Prime', monospace; font-size: 0.65rem; letter-spacing: 1.5px; text-transform: uppercase; padding: 8px 10px; text-align: left; font-weight: 700; cursor: pointer; user-select: none; white-space: nowrap; }
+.checklist thead th:hover { background: var(--ink-light); }
+.checklist tbody tr { border-bottom: 1px solid var(--ruled); transition: background 0.1s; }
+.checklist tbody tr:hover { background: var(--paper-dark); }
+.checklist tbody tr.logged { background: #eef4e8; }
+.checklist tbody tr.logged:hover { background: #e4eedd; }
+.checklist tbody tr.migratory-row { background: #fdf8ee; }
+.checklist tbody tr.migratory-row.logged { background: #eef4e8; }
+.checklist td { padding: 8px 10px; vertical-align: top; line-height: 1.4; }
+.root-part { font-family: 'Courier Prime', monospace; font-weight: 700; font-size: 0.9rem; color: var(--accent); }
+.origin-tag { display: inline-block; font-family: 'Courier Prime', monospace; font-size: 0.6rem; letter-spacing: 1px; text-transform: uppercase; padding: 2px 7px; border-radius: 2px; white-space: nowrap; }
+.origin-Greek { background:#e8d0f0;color:#5a2070; }
+.origin-Latin { background:#d0e4f8;color:#1e3a6a; }
+.origin-OldEnglish,.origin-OldEnglishAngloSaxon { background:#f0e4c8;color:#6a4010; }
+.origin-German { background:#e8e8d0;color:#4a4820; }
+.origin-Norse { background:#d8e8f4;color:#1a4060; }
+.origin-French { background:#f4d8e4;color:#6a1840; }
+.origin-Spanish { background:#f8e8c0;color:#7a4800; }
+.origin-Italian { background:#f0d8c0;color:#6a3010; }
+.origin-Portuguese { background:#d8f0e8;color:#0a5030; }
+.origin-DutchFlemish { background:#e8f0d8;color:#2a5010; }
+.origin-Arabic { background:#f8e4c0;color:#6a3800; }
+.origin-Hebrew { background:#e4e8f8;color:#1a2870; }
+.origin-SanskritHindi { background:#f8d8e8;color:#6a1050; }
+.origin-Japanese { background:#f0e8f8;color:#4a1870; }
+.origin-Exotics { background:#e8f8f0;color:#0a5040; }
+.origin-MigratoryWord { background:#f8f0d8;color:#5a4808; }
+.func-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.func-tag { font-family: 'Courier Prime', monospace; font-size: 0.6rem; padding: 1px 6px; border: 1px solid var(--ruled); border-radius: 1px; color: var(--ink-light); white-space: nowrap; }
+.func-tag.active { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+.func-tag.migratory { background: #c8a830; color: #fff; border-color: #c8a830; }
+.log-indicator { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--paper-darker); display: inline-block; cursor: pointer; transition: all 0.15s; vertical-align: middle; }
+.log-indicator.logged { background: var(--green); border-color: var(--green); }
+.student-log-row td { padding: 0; background: #eef4e8; }
+.log-form-inner { padding: 12px 16px; border-left: 3px solid var(--green); display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.log-form-inner .field-group { margin: 0; flex: 1; min-width: 140px; }
+.log-saved { font-family: 'Courier Prime', monospace; font-size: 0.75rem; color: var(--green); font-style: italic; }
+.etymonline-link { font-family: 'Courier Prime', monospace; font-size: 0.65rem; color: var(--accent-muted); text-decoration: none; border-bottom: 1px dotted var(--accent-muted); }
+.etymonline-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ADD FORMS */
+.add-root-form { background: var(--paper-dark); border: 1px solid var(--paper-darker); border-left: 3px solid var(--accent); padding: 20px; margin-bottom: 24px; }
+.add-root-form h3 { font-family: 'Playfair Display', serif; font-size: 1rem; color: var(--accent); margin-bottom: 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.form-grid .field-group { margin: 0; }
+.form-grid .full-width { grid-column: 1 / -1; }
+.checkbox-group { display: flex; gap: 14px; align-items: center; margin-top: 6px; }
+.checkbox-group label { display: flex; align-items: center; gap: 5px; font-family: 'Courier Prime', monospace; font-size: 0.75rem; color: var(--ink-light); cursor: pointer; text-transform: none; letter-spacing: 0; }
+.checkbox-group input[type=checkbox] { width: auto; accent-color: var(--accent); }
+
+/* TEACHER */
+.teacher-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.student-card { background: var(--paper-dark); border: 1px solid var(--paper-darker); border-top: 3px solid var(--accent-muted); padding: 14px; }
+.student-card h3 { font-family: 'Playfair Display', serif; font-size: 1rem; color: var(--accent); margin-bottom: 4px; }
+.student-card .stats { font-family: 'Courier Prime', monospace; font-size: 0.7rem; color: var(--accent-muted); letter-spacing: 1px; margin-bottom: 10px; }
+.student-card .reset-area { border-top: 1px solid var(--ruled); padding-top: 10px; margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.student-card .reset-area input { flex: 1; min-width: 80px; padding: 5px 8px; font-family: 'Courier Prime', monospace; font-size: 0.75rem; background: var(--paper); border: 1px solid var(--paper-darker); color: var(--ink); }
+.student-logs-list { font-size: 0.78rem; line-height: 1.6; max-height: 100px; overflow-y: auto; }
+.student-logs-list .log-entry { border-bottom: 1px dotted var(--ruled); padding: 3px 0; color: var(--ink-light); }
+.student-logs-list .log-entry strong { font-family: 'Courier Prime', monospace; color: var(--accent); }
+.root-manager-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--ruled); font-size: 0.82rem; }
+.root-manager-row .root-id { font-family: 'Courier Prime', monospace; font-weight: 700; color: var(--accent); min-width: 100px; }
+
+/* SCOREBOARD */
+.scoreboard-table { width: 100%; border-collapse: collapse; }
+.scoreboard-table thead tr { background: var(--ink); color: var(--paper); }
+.scoreboard-table thead th { font-family: 'Courier Prime', monospace; font-size: 0.65rem; letter-spacing: 1.5px; text-transform: uppercase; padding: 10px 14px; text-align: left; }
+.scoreboard-table thead th.num { text-align: right; }
+.scoreboard-table tbody tr { border-bottom: 1px solid var(--ruled); transition: background 0.1s; }
+.scoreboard-table tbody tr:hover { background: var(--paper-dark); }
+.scoreboard-table tbody tr.me { background: #eef4e8; font-weight: 600; }
+.scoreboard-table td { padding: 9px 14px; font-size: 0.88rem; }
+.scoreboard-table td.num { text-align: right; font-family: 'Courier Prime', monospace; font-size: 0.85rem; }
+.rank-num { font-family: 'Courier Prime', monospace; color: var(--accent-muted); font-size: 0.8rem; }
+.rank-1 .rank-num { color: #b8860b; font-weight: 700; }
+.rank-2 .rank-num { color: #707070; font-weight: 700; }
+.rank-3 .rank-num { color: #8b5a2b; font-weight: 700; }
+.medal { margin-right: 4px; }
+
+/* DANGER ZONE */
+.danger-zone { background: #fff5f5; border: 1px solid #e8c0c0; border-left: 3px solid #8a2020; padding: 20px; margin-top: 24px; }
+.danger-zone h3 { font-family: 'Playfair Display', serif; font-size: 1rem; color: #8a2020; margin-bottom: 8px; }
+.danger-zone p { font-size: 0.82rem; color: #6a3030; margin-bottom: 14px; font-style: italic; line-height: 1.5; }
+
+/* UTILITY */
+.mt-8 { margin-top: 8px; } .mt-16 { margin-top: 16px; }
+.flex-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.muted { color: var(--accent-muted); font-size: 0.8rem; }
+.divider { border: none; border-top: 1px solid var(--ruled); margin: 20px 0; }
+.no-entries { font-style: italic; color: var(--accent-muted); font-size: 0.85rem; text-align: center; padding: 30px; }
+.notice { background: var(--paper-dark); border: 1px solid var(--paper-darker); border-left: 3px solid var(--accent-muted); padding: 10px 14px; font-size: 0.82rem; color: var(--ink-light); font-style: italic; margin-bottom: 16px; }
+
+@media (max-width: 700px) {
+  .book-inner { padding: 0 16px 24px 36px; }
+  .checklist thead th { font-size: 0.6rem; padding: 6px 5px; }
+  .checklist td { padding: 6px 5px; font-size: 0.78rem; }
+  .title-block h1 { font-size: 1.6rem; }
+  .header-bird { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <span id="loadingMsg">Opening Field Guide…</span>
+</div>
+
+<div class="book">
+<div class="book-inner">
+
+  <div class="header">
+    <div class="header-top">
+      <div class="title-block">
+        <h1>Word Root Field Guide</h1>
+        <div class="subtitle">A Naturalist's Lexicon Tracker</div>
+      </div>
+      <div class="header-bird">🪶</div>
+    </div>
+    <div class="user-bar" id="userBar" style="display:none">
+      <span>Logged in as</span>
+      <span class="user-badge" id="userBadgeLabel"></span>
+      <button class="btn btn-secondary btn-sm" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <!-- VERSION COMPATIBILITY BANNER — shown if app/db version mismatch detected -->
+  <div id="versionBanner" style="display:none;padding:10px 16px;font-family:'Courier Prime',monospace;font-size:0.8rem;line-height:1.5"></div>
+
+  <div class="tab-row" id="tabRow" style="display:none">
+    <button class="tab active" onclick="showTab('list')" id="tab-list">My Field List</button>
+    <button class="tab" onclick="showTab('addmig')" id="tab-addmig" style="display:none">+ Migratory Word</button>
+    <button class="tab" onclick="showTab('add')" id="tab-add" style="display:none">+ Root (Teacher)</button>
+    <button class="tab" onclick="showTab('scoreboard')" id="tab-scoreboard">Scoreboard</button>
+    <button class="tab" onclick="showTab('teacher')" id="tab-teacher" style="display:none">Teacher View</button>
+  </div>
+
+  <!-- LOGIN -->
+  <div class="screen active" id="screen-login">
+    <div class="login-wrap">
+      <div class="emblem">📖</div>
+      <h2>Sign In to Your Field Guide</h2>
+      <p>Enter your username and PIN to access your personal word root list.</p>
+      <div id="loginForm">
+        <div class="field-group">
+          <label>Username</label>
+          <input type="text" id="loginUser" placeholder="e.g. jsmith" autocomplete="username">
+        </div>
+        <div class="field-group">
+          <label>PIN / Password</label>
+          <input type="password" id="loginPin" placeholder="••••" autocomplete="current-password">
+        </div>
+        <div id="loginError" class="error-msg"></div>
+        <div class="mt-16">
+          <button class="btn btn-primary" id="loginBtn" onclick="doLogin()">Open Field Guide</button>
+        </div>
+        <div class="toggle-link mt-8" onclick="showRegister()">New student? Register here</div>
+      </div>
+      <div id="registerForm" style="display:none">
+        <div class="field-group">
+          <label>Choose a username</label>
+          <input type="text" id="regUser" placeholder="e.g. jsmith">
+        </div>
+        <div class="field-group">
+          <label>Choose a 4-digit PIN <span class="muted" style="letter-spacing:0;text-transform:none;font-style:italic">(at most one repeated digit)</span></label>
+          <input type="password" id="regPin" placeholder="••••" maxlength="4" inputmode="numeric">
+        </div>
+        <div class="field-group">
+          <label>Confirm PIN</label>
+          <input type="password" id="regPin2" placeholder="••••" maxlength="4" inputmode="numeric">
+        </div>
+        <div id="regError" class="error-msg"></div>
+        <div class="mt-16 flex-row">
+          <button class="btn btn-primary" id="regBtn" onclick="doRegister()">Create Account</button>
+          <button class="btn btn-secondary" onclick="showLogin()">Back to Login</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIELD LIST -->
+  <div class="screen" id="screen-list">
+    <div class="section-header">
+      <h2>Root Parts Checklist</h2>
+      <div class="flex-row">
+        <span class="count-badge" id="listCount">loading…</span>
+        <button class="btn btn-secondary btn-sm" onclick="exportMyCSV()">Download My List (CSV)</button>
+      </div>
+    </div>
+    <div class="filters">
+      <label>Filter:</label>
+      <select id="filterOrigin" onchange="renderList()">
+        <option value="">All Origins</option>
+        <option>Greek</option><option>Latin</option><option>Old English/Anglo-Saxon</option>
+        <option>German</option><option>Norse</option><option>French</option>
+        <option>Spanish</option><option>Italian</option><option>Portuguese</option>
+        <option>Dutch/Flemish</option><option>Arabic</option><option>Hebrew</option>
+        <option>Sanskrit/Hindi</option><option>Japanese</option>
+        <option>Exotics</option><option>Migratory Word</option>
+      </select>
+      <select id="filterFunc" onchange="renderList()">
+        <option value="">All Types</option>
+        <option value="root">Roots Only</option>
+        <option value="migratory">Migratory Words Only</option>
+        <option>Prefix</option><option>Root</option><option>Suffix</option>
+      </select>
+      <select id="filterLogged" onchange="renderList()">
+        <option value="">All Entries</option>
+        <option value="yes">Logged Only</option>
+        <option value="no">Not Yet Logged</option>
+      </select>
+      <input type="text" id="filterSearch" placeholder="Search…" oninput="renderList()" style="min-width:130px">
+    </div>
+    <div style="overflow-x:auto">
+      <table class="checklist">
+        <thead>
+          <tr>
+            <th onclick="sortBy('logged')" title="Logged?">✓</th>
+            <th onclick="sortBy('part')">Root / Word ↕</th>
+            <th onclick="sortBy('origin')">Origin ↕</th>
+            <th>Source Lang.</th>
+            <th>Type</th>
+            <th>Meaning</th>
+            <th>Teacher Example</th>
+            <th>Your Word</th>
+            <th>Your Word's Meaning</th>
+            <th>Found In</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody id="checklistBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ADD MIGRATORY WORD (students + teacher) -->
+  <div class="screen" id="screen-addmig">
+    <div class="add-root-form" style="border-left-color:#c8a830">
+      <h3 style="color:#7a5c10">Add a Migratory Word to the Field Guide</h3>
+      <div class="notice">A <strong>Migratory Word</strong> is a whole foreign word borrowed into English — like <em>schadenfreude</em>, <em>tsunami</em>, or <em>je ne sais quoi</em>. If the word is already in the list, you'll be taken to log your encounter with it instead.</div>
+      <div class="form-grid">
+        <div class="field-group">
+          <label>The Word *</label>
+          <input type="text" id="migWord" placeholder="e.g. schadenfreude">
+        </div>
+        <div class="field-group">
+          <label>Source Language *</label>
+          <select id="migSourceLang" onchange="onMigSourceLangChange()">
+            <option value="">Select…</option>
+            <option>Greek</option><option>Latin</option><option>Old English/Anglo-Saxon</option>
+            <option>German</option><option>Norse</option><option>French</option>
+            <option>Spanish</option><option>Italian</option><option>Portuguese</option>
+            <option>Dutch/Flemish</option><option>Arabic</option><option>Hebrew</option>
+            <option>Sanskrit/Hindi</option><option>Japanese</option><option>Other</option>
+          </select>
+        </div>
+        <div class="field-group" id="migSourceOtherWrap" style="display:none">
+          <label>Specify Language</label>
+          <input type="text" id="migSourceOther" placeholder="e.g. Swahili">
+        </div>
+        <div class="field-group">
+          <label>Meaning *</label>
+          <input type="text" id="migMeaning" placeholder="e.g. pleasure from others' misfortune">
+        </div>
+        <div class="field-group full-width">
+          <label>Breakdown / Explanation</label>
+          <input type="text" id="migNote" placeholder="e.g. German: Schaden (damage) + Freude (joy)">
+        </div>
+        <div class="field-group">
+          <label>Your Word (where you found it)</label>
+          <input type="text" id="migMyWord" placeholder="e.g. schadenfreude">
+        </div>
+        <div class="field-group">
+          <label>Your Definition</label>
+          <input type="text" id="migMyDef" placeholder="In your own words…">
+        </div>
+        <div class="field-group">
+          <label>Found In</label>
+          <input type="text" id="migFoundIn" placeholder="e.g. The New Yorker, p. 12">
+        </div>
+        <div class="field-group" style="min-width:120px;max-width:150px">
+          <label>Date Found</label>
+          <input type="date" id="migDate">
+        </div>
+      </div>
+      <div class="mt-16 flex-row">
+        <button class="btn btn-primary" id="addMigBtn" onclick="addMigratory()">Add to Field Guide</button>
+        <span id="addMigMsg" class="log-saved"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD ROOT (teacher only) -->
+  <div class="screen" id="screen-add">
+    <div class="add-root-form">
+      <h3>Add New Root to the Master List</h3>
+      <div class="form-grid">
+        <div class="field-group">
+          <label>Root *</label>
+          <input type="text" id="newPart" placeholder="e.g. bio-, graph, -logy">
+        </div>
+        <div class="field-group">
+          <label>Origin *</label>
+          <select id="newOrigin" onchange="onOriginChange()">
+            <option value="">Select…</option>
+            <option>Greek</option><option>Latin</option><option>Old English/Anglo-Saxon</option>
+            <option>German</option><option>Norse</option><option>French</option>
+            <option>Spanish</option><option>Italian</option><option>Portuguese</option>
+            <option>Dutch/Flemish</option><option>Arabic</option><option>Hebrew</option>
+            <option>Sanskrit/Hindi</option><option>Japanese</option><option>Exotics</option>
+          </select>
+        </div>
+        <div class="field-group" id="newSourceLangWrap" style="display:none">
+          <label>Source Language (Exotics)</label>
+          <select id="newSourceLang" onchange="onSourceLangChange()">
+            <option value="">Select…</option>
+            <option>Greek</option><option>Latin</option><option>Old English/Anglo-Saxon</option>
+            <option>German</option><option>Norse</option><option>French</option>
+            <option>Spanish</option><option>Italian</option><option>Portuguese</option>
+            <option>Dutch/Flemish</option><option>Arabic</option><option>Hebrew</option>
+            <option>Sanskrit/Hindi</option><option>Japanese</option><option>Other</option>
+          </select>
+          <input type="text" id="newSourceLangOther" placeholder="Specify language…" style="display:none;margin-top:6px">
+        </div>
+        <div class="field-group">
+          <label>Meaning *</label>
+          <input type="text" id="newMeaning" placeholder="e.g. life, to write">
+        </div>
+        <div class="field-group">
+          <label>Teacher Example Word *</label>
+          <input type="text" id="newExample" placeholder="e.g. biography">
+        </div>
+        <div class="field-group full-width">
+          <label>Example Explanation <span id="newExampleNoteHint" class="muted" style="font-style:italic;letter-spacing:0;text-transform:none"></span></label>
+          <input type="text" id="newExampleNote" placeholder="e.g. bio (life) + graphy (writing) = a written life story">
+        </div>
+        <div class="field-group full-width">
+          <label>Function (check all that apply)</label>
+          <div class="checkbox-group">
+            <label><input type="checkbox" id="newIsPrefix"> Prefix</label>
+            <label><input type="checkbox" id="newIsRoot"> Root</label>
+            <label><input type="checkbox" id="newIsSuffix"> Suffix</label>
+          </div>
+        </div>
+      </div>
+      <div class="mt-16 flex-row">
+        <button class="btn btn-primary" id="addRootBtn" onclick="addRoot()">Add to Field Guide</button>
+        <span id="addRootMsg" class="log-saved"></span>
+      </div>
+    </div>
+    <hr class="divider">
+    <div class="section-header"><h2>Manage Existing Roots</h2></div>
+    <div id="rootManagerList"></div>
+  </div>
+
+  <!-- SCOREBOARD -->
+  <div class="screen" id="screen-scoreboard">
+    <div class="section-header">
+      <h2>Field Guide Scoreboard</h2>
+      <span class="count-badge" id="scoreboardCount"></span>
+    </div>
+    <div class="notice">Roots and Migratory Words are counted separately — because finding a word in the wild takes a different kind of eye than cracking a root apart.</div>
+    <table class="scoreboard-table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Naturalist</th>
+          <th class="num">Roots</th>
+          <th class="num">Migratory Words</th>
+          <th class="num">Total</th>
+        </tr>
+      </thead>
+      <tbody id="scoreboardBody"></tbody>
+    </table>
+  </div>
+
+  <!-- TEACHER VIEW -->
+  <div class="screen" id="screen-teacher">
+    <div class="section-header">
+      <h2>Teacher Dashboard</h2>
+      <button class="btn btn-secondary btn-sm" onclick="exportAllCSV()">Export All Students (CSV)</button>
+    </div>
+
+    <!-- Default password warning — only shown if password hasn't been changed -->
+    <div id="defaultPwdWarning" style="display:none;background:#fff8e8;border:1px solid #e8c840;border-left:3px solid #c8a000;padding:10px 16px;margin-bottom:16px;font-size:0.85rem;color:#6a5000;font-family:'Courier Prime',monospace">
+      ⚠ You're still using the default password. Please change it below before using this with students.
+    </div>
+
+    <div style="margin-bottom:20px">
+      <h3 style="font-family:'Playfair Display',serif;font-size:1rem;color:var(--accent);margin-bottom:6px">Password Settings</h3>
+      <p class="muted" style="margin-bottom:10px;font-style:italic">Minimum 12 characters. Cannot contain "please", "change", or "this".</p>
+      <div class="flex-row">
+        <input type="password" id="newTeacherPwd" placeholder="New teacher password (min. 12 chars)" style="padding:7px 12px;font-family:'Courier Prime',monospace;font-size:0.8rem;background:var(--paper-dark);border:1px solid var(--paper-darker);color:var(--ink);min-width:260px">
+        <button class="btn btn-secondary btn-sm" onclick="changeTeacherPwd()">Change Password</button>
+        <span id="pwdMsg" class="log-saved"></span>
+      </div>
+    </div>
+
+    <hr class="divider">
+    <div class="section-header">
+      <h2>Student Accounts</h2>
+      <span class="count-badge" id="studentCount">0 students</span>
+    </div>
+    <div class="teacher-grid" id="teacherGrid"></div>
+
+    <!-- DANGER ZONE -->
+    <div class="danger-zone">
+      <h3>⚠ End-of-Year Reset</h3>
+      <p>This will permanently delete all student accounts and their logs. Your root list — including everything you've added — will be kept intact. This cannot be undone.</p>
+      <p>To confirm, type your username (<strong>teacher</strong>) below and click Reset.</p>
+      <div class="flex-row">
+        <input type="text" id="wipeConfirm" placeholder="Type: teacher" style="padding:7px 12px;font-family:'Courier Prime',monospace;font-size:0.8rem;background:var(--paper);border:1px solid var(--paper-darker);color:var(--ink);min-width:180px">
+        <button class="btn btn-danger" style="font-size:0.75rem;padding:7px 16px" onclick="doWipe()">Reset for New Year</button>
+        <span id="wipeMsg" class="log-saved"></span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /book-inner -->
+</div><!-- /book -->
+
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const SUPABASE_URL = 'https://evlvnsqjtnonnijkosjj.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2bHZuc3FqdG5vbm5pamtvc2pqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0Mzg2NzMsImV4cCI6MjA4OTAxNDY3M30.Nn4xsb3Lkn5YVRIwz89nNyyRMyAjEkO9tmXnxE-9gVU';
+
+// The version of this app file. Must match the app_version value in the database settings table.
+// Update this whenever a new version is released, and update the database to match (see MIGRATIONS.md).
+const APP_VERSION = '1.3.2';
+
+// Optional: set this to the URL where students can download the latest version of this file.
+// If set, out-of-date users will see a direct download link in the version mismatch banner.
+// const DOWNLOAD_URL = 'https://your-url-here';
+
+const H = { 'Content-Type':'application/json', 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Prefer':'return=representation' };
+
+// Core database helper — sends a request to Supabase and returns the result.
+// path is the table + query string, method is GET/POST/PATCH/DELETE, body is optional JSON data.
+async function sb(path, method='GET', body=null) {
+  const opts = { method, headers: H };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
+  if (!res.ok) throw new Error(await res.text());
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('json') && res.status !== 204) return res.json();
+  return null;
+}
+
+// ============================================================
+// STATE
+// ============================================================
+let currentUser = null;
+let allRoots = [];   // all roots + migratory words from DB
+let myLogs = {};     // { root_id: logObj }
+let sortKey = 'part';
+let sortDir = 1;
+
+// ============================================================
+// BOOT
+// ============================================================
+// Runs once when the page loads. Checks if the database has any roots yet;
+// if it's empty (a brand new install), seeds it with the default root list.
+// Also checks whether the app version matches the database version and shows
+// a banner if they are out of sync.
+async function boot() {
+  showLoading('Opening Field Guide…');
+  try {
+    const existing = await sb('roots?select=id&limit=1');
+    if (!existing || existing.length === 0) {
+      showLoading('Planting default roots…');
+      await seedRoots();
+      // Write the current version into the database on first install
+      await sb('settings', 'POST', { key:'app_version', value:APP_VERSION });
+    } else {
+      // Check version compatibility
+      await checkVersion();
+    }
+  } catch(e) { console.error('Boot:', e); }
+  hideLoading();
+}
+
+// Compares the app's hardcoded version against the version stored in the database.
+// Shows a banner if they don't match, with appropriate messaging for each case.
+async function checkVersion() {
+  try {
+    const result = await sb('settings?key=eq.app_version&select=value');
+    const dbVersion = result && result[0] ? result[0].value : null;
+
+    // If no version in db yet, write it (upgrading from a pre-versioning install)
+    if (!dbVersion) {
+      await sb('settings', 'POST', { key:'app_version', value:APP_VERSION });
+      return;
+    }
+
+    if (dbVersion === APP_VERSION) return; // All good, no banner needed
+
+    const banner = el('versionBanner');
+    const downloadLink = typeof DOWNLOAD_URL !== 'undefined'
+      ? ` <a href="${DOWNLOAD_URL}" style="color:inherit;font-weight:700">Download version ${dbVersion} here ↗</a>`
+      : '';
+
+    if (APP_VERSION > dbVersion) {
+      // App is newer than the database — teacher needs to run a migration
+      banner.style.background = '#fff8e8';
+      banner.style.borderLeft = '3px solid #c8a000';
+      banner.style.color = '#6a5000';
+      banner.innerHTML = currentUser === 'TEACHER'
+        ? `⚠ Your database is version ${dbVersion} but this app is version ${APP_VERSION}. Please run the migration script from MIGRATIONS.md, then update the app_version in your settings table to ${APP_VERSION}.`
+        : `⚠ This app (version ${APP_VERSION}) is newer than your teacher's database (version ${dbVersion}). Please ask your teacher to update the database.`;
+    } else {
+      // App is older than the database — user needs a newer copy of the file
+      banner.style.background = '#fff0f0';
+      banner.style.borderLeft = '3px solid #c84040';
+      banner.style.color = '#6a2020';
+      banner.innerHTML = `⚠ This app is out of date (version ${APP_VERSION}). You need version ${dbVersion}. Please ask your teacher for the latest file.${downloadLink}`;
+    }
+    banner.style.display = '';
+  } catch(e) {
+    console.error('Version check failed:', e);
+  }
+}
+
+// Hashes a password using SHA-256 via the browser's built-in crypto API.
+// The stored value is a hex string — it cannot be reversed back to the original.
+// This means even if someone reads the database directly, the password is safe.
+async function hashPassword(password) {
+  const msgBuffer = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
+// AUTH
+// ============================================================
+// Handles the login form submission. Checks the teacher password first (comparing
+// hashes), then looks up the student username and PIN in the database.
+// Supports legacy plain-text passwords and silently upgrades them to hashes on login.
+async function doLogin() {
+  const user = el('loginUser').value.trim().toLowerCase();
+  const pin  = el('loginPin').value.trim();
+  const err  = el('loginError');
+  err.textContent = '';
+  if (!user || !pin) { err.textContent = 'Please enter username and PIN.'; return; }
+  setBtn('loginBtn', true, 'Checking…');
+  showLoading('Checking credentials…');
+  try {
+    const settings = await sb('settings?key=eq.teacher_pwd&select=value');
+    const storedPwd = settings && settings[0] ? settings[0].value : '';
+    if (user === 'teacher') {
+      const hashed = await hashPassword(pin);
+      const matchesHash  = hashed === storedPwd;
+      const matchesPlain = pin === storedPwd; // legacy plain-text support
+      if (matchesHash || matchesPlain) {
+        // Silently upgrade plain-text password to hash on first login
+        if (matchesPlain && !matchesHash) {
+          await sb('settings?key=eq.teacher_pwd', 'PATCH', { value: hashed });
+        }
+        currentUser = 'TEACHER'; await enterApp(); return;
+      }
+      err.textContent = 'Incorrect password.'; done('loginBtn','Open Field Guide'); return;
+    }
+    const users = await sb(`users?username=eq.${enc(user)}&select=username,pin`);
+    if (!users || !users.length) { err.textContent = 'Username not found.'; done('loginBtn','Open Field Guide'); return; }
+    if (users[0].pin !== pin) { err.textContent = 'Incorrect PIN.'; done('loginBtn','Open Field Guide'); return; }
+    currentUser = user; await enterApp();
+  } catch(e) { err.textContent = 'Connection error. Try again.'; done('loginBtn','Open Field Guide'); }
+}
+
+// Handles new student registration. Validates the username and PIN rules,
+// checks for duplicates, then creates the account in the database.
+async function doRegister() {
+  const user = el('regUser').value.trim().toLowerCase();
+  const pin  = el('regPin').value.trim();
+  const pin2 = el('regPin2').value.trim();
+  const err  = el('regError');
+  err.style.color = '#8a2020'; err.textContent = '';
+  if (!user) { err.textContent = 'Please choose a username.'; return; }
+  if (user === 'teacher') { err.textContent = 'That username is reserved.'; return; }
+  if (!/^\d{4}$/.test(pin)) { err.textContent = 'PIN must be exactly 4 digits.'; return; }
+  if (!validPin(pin)) { err.textContent = 'PIN cannot have more than one repeated digit (e.g. 1234 ✓, 1123 ✓, 1122 ✗).'; return; }
+  if (pin !== pin2) { err.textContent = 'PINs do not match.'; return; }
+  setBtn('regBtn', true, 'Creating…');
+  showLoading('Creating your account…');
+  try {
+    const existing = await sb(`users?username=eq.${enc(user)}&select=username`);
+    if (existing && existing.length) { err.textContent = 'Username already taken.'; done('regBtn','Create Account'); return; }
+    await sb('users', 'POST', { username: user, pin });
+    currentUser = user; await enterApp();
+  } catch(e) { err.textContent = 'Error creating account. Try again.'; done('regBtn','Create Account'); }
+}
+
+// Called after a successful login. Loads all roots from the database,
+// loads the student's personal logs, sets up the tabs, and shows the main list.
+async function enterApp() {
+  showLoading('Loading your field guide…');
+  allRoots = await sb('roots?select=*&order=part.asc') || [];
+  if (currentUser !== 'TEACHER') {
+    const logs = await sb(`logs?username=eq.${enc(currentUser)}&select=*`) || [];
+    myLogs = {};
+    logs.forEach(l => myLogs[l.root_id] = l);
+  }
+  el('screen-login').classList.remove('active');
+  el('userBar').style.display = 'flex';
+  el('tabRow').style.display = 'flex';
+  el('userBadgeLabel').textContent = currentUser === 'TEACHER' ? '⚑ Teacher' : currentUser;
+  el('tab-teacher').style.display = currentUser === 'TEACHER' ? '' : 'none';
+  el('tab-add').style.display = currentUser === 'TEACHER' ? '' : 'none';
+  el('tab-addmig').style.display = currentUser !== 'TEACHER' ? '' : '';  // both can add migratory
+  // Set today's date on migratory form
+  el('migDate').value = today();
+  hideLoading();
+  setBtn('loginBtn', false, 'Open Field Guide');
+  showTab('list');
+}
+
+// Clears the current session and returns to the login screen.
+function logout() {
+  currentUser = null; allRoots = []; myLogs = {};
+  ['list','addmig','add','scoreboard','teacher'].forEach(t => el('screen-'+t).classList.remove('active'));
+  el('screen-login').classList.add('active');
+  el('userBar').style.display = 'none';
+  el('tabRow').style.display = 'none';
+  el('loginUser').value = ''; el('loginPin').value = ''; el('loginError').textContent = '';
+  showLogin();
+}
+
+// Switches the login screen to show the registration form.
+function showRegister() { el('loginForm').style.display='none'; el('registerForm').style.display=''; }
+// Switches back to the login form from the registration form.
+function showLogin()    { el('loginForm').style.display='';     el('registerForm').style.display='none'; }
+
+// ============================================================
+// TABS
+// ============================================================
+// Shows the requested tab and hides all others. Also triggers any data
+// loading needed for that tab (e.g. scoreboard fetches fresh data each time).
+function showTab(tab) {
+  ['list','addmig','add','scoreboard','teacher'].forEach(t => {
+    el('screen-'+t).classList.toggle('active', t===tab);
+    const tb = el('tab-'+t);
+    if (tb) tb.classList.toggle('active', t===tab);
+  });
+  if (tab==='list') renderList();
+  if (tab==='add') renderRootManager();
+  if (tab==='scoreboard') renderScoreboard();
+  if (tab==='teacher') renderTeacher();
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+// Converts an origin name like "Old English/Anglo-Saxon" into a CSS class suffix
+// like "OldEnglish" — used to color-code the origin tags in the table.
+function originKey(o) {
+  return (o||'').replace(/[\s\/\-,]/g,'').replace('AngloSaxon','').replace('Flemish','').replace('Hindi','');
+}
+
+// Returns true if a root entry is a Migratory Word (a whole borrowed foreign word)
+// rather than a productive word-forming element.
+function isMigratoryRoot(root) {
+  return root.origin === 'Migratory Word';
+}
+
+// Checks whether a 4-digit PIN meets the complexity rule:
+// no digit may appear more than twice, and at most one digit may appear twice.
+// Valid: 1234, 1123. Invalid: 1122 (two pairs), 1112 (one digit three times).
+function validPin(pin) {
+  const freq = {};
+  for (const d of pin) freq[d] = (freq[d]||0)+1;
+  const counts = Object.values(freq);
+  if (counts.some(c=>c>2)) return false;
+  if (counts.filter(c=>c===2).length > 1) return false;
+  return true;
+}
+
+// Builds a small "etym ↗" link that opens the word on EtymOnline in a new tab.
+// Converts the word to a URL-safe slug (e.g. "je ne sais quoi" → "je-ne-sais-quoi").
+function etymLink(word) {
+  if (!word) return '';
+  const slug = word.toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
+  return `<a href="https://www.etymonline.com/word/${slug}" target="_blank" class="etymonline-link" title="Look up on EtymOnline">etym ↗</a>`;
+}
+
+// ============================================================
+// LIST
+// ============================================================
+// Draws the main checklist table. Applies any active filters and sort order,
+// then builds a row for each root plus a hidden inline log form beneath it.
+function renderList() {
+  const fOrigin = el('filterOrigin').value;
+  const fFunc   = el('filterFunc').value;
+  const fLogged = el('filterLogged').value;
+  const fSearch = el('filterSearch').value.toLowerCase();
+
+  let roots = [...allRoots];
+  if (fOrigin) roots = roots.filter(r => r.origin === fOrigin);
+  if (fFunc === 'root') roots = roots.filter(r => !isMigratoryRoot(r));
+  if (fFunc === 'migratory') roots = roots.filter(r => isMigratoryRoot(r));
+  if (fFunc === 'Prefix') roots = roots.filter(r => r.is_prefix);
+  if (fFunc === 'Root')   roots = roots.filter(r => r.is_root);
+  if (fFunc === 'Suffix') roots = roots.filter(r => r.is_suffix);
+  if (fLogged === 'yes')  roots = roots.filter(r => myLogs[r.id]);
+  if (fLogged === 'no')   roots = roots.filter(r => !myLogs[r.id]);
+  if (fSearch) roots = roots.filter(r =>
+    (r.part||'').toLowerCase().includes(fSearch) ||
+    (r.meaning||'').toLowerCase().includes(fSearch) ||
+    (r.origin||'').toLowerCase().includes(fSearch)
+  );
+
+  roots.sort((a,b) => {
+    let av, bv;
+    if (sortKey==='logged') { av=myLogs[a.id]?1:0; bv=myLogs[b.id]?1:0; }
+    else { av=(a[sortKey]||'').toLowerCase(); bv=(b[sortKey]||'').toLowerCase(); }
+    return av<bv ? -sortDir : av>bv ? sortDir : 0;
+  });
+
+  const tbody = el('checklistBody');
+  tbody.innerHTML = '';
+
+  roots.forEach(root => {
+    const log = myLogs[root.id];
+    const isMig = isMigratoryRoot(root);
+    const oKey = originKey(root.origin);
+    const funcs = isMig ? ['Migratory Word'] : [
+      root.is_prefix?'Prefix':null, root.is_root?'Root':null, root.is_suffix?'Suffix':null
+    ].filter(Boolean);
+
+    // Source language display
+    const srcLang = root.source_lang ? `<span class="muted" style="font-size:0.7rem">${esc(root.source_lang)}</span>` : '<span class="muted">—</span>';
+
+    const tr = document.createElement('tr');
+    if (log) tr.classList.add('logged');
+    if (isMig) tr.classList.add('migratory-row');
+    tr.innerHTML = `
+      <td><span class="log-indicator ${log?'logged':''}" onclick="toggleLog('${root.id}')" title="${log?'Click to edit':'Click to log your encounter'}"></span></td>
+      <td><span class="root-part">${esc(root.part)}</span><br>${etymLink(root.example||root.part)}</td>
+      <td><span class="origin-tag origin-${oKey}">${esc(root.origin)}</span></td>
+      <td>${srcLang}</td>
+      <td><div class="func-tags">${funcs.map(f=>`<span class="func-tag ${isMig?'migratory':'active'}">${f}</span>`).join('')}</div></td>
+      <td>${esc(root.meaning)}</td>
+      <td>${root.example ? `<span style="font-style:italic">${esc(root.example)}</span>` : ''}${root.example_note ? `<br><span class="muted">${esc(root.example_note)}</span>` : ''}</td>
+      <td>${log ? esc(log.word||'') : '<span class="muted">—</span>'}</td>
+      <td>${log ? esc(log.definition||'') : '<span class="muted">—</span>'}</td>
+      <td>${log ? esc(log.found_in||'') : '<span class="muted">—</span>'}</td>
+      <td>${log ? esc(log.date_found||'') : '<span class="muted">—</span>'}</td>
+    `;
+    tbody.appendChild(tr);
+
+    // inline log form
+    const logRow = document.createElement('tr');
+    logRow.classList.add('student-log-row');
+    logRow.id = 'logrow-'+root.id;
+    logRow.style.display = 'none';
+    logRow.innerHTML = `<td colspan="11">
+      <div class="log-form-inner">
+        <div class="field-group">
+          <label>Your Word *</label>
+          <input type="text" id="lw-${root.id}" value="${log?esc(log.word||''):''}" placeholder="Word you found">
+        </div>
+        <div class="field-group">
+          <label>Your Word's Meaning *</label>
+          <input type="text" id="ld-${root.id}" value="${log?esc(log.definition||''):''}" placeholder="What does your word mean?">
+        </div>
+        <div class="field-group">
+          <label>Found In *</label>
+          <input type="text" id="lf-${root.id}" value="${log?esc(log.found_in||''):''}" placeholder="e.g. The Outsiders, Ch. 3">
+        </div>
+        <div class="field-group" style="min-width:110px;max-width:130px">
+          <label>Date Found</label>
+          <input type="date" id="ldate-${root.id}" value="${log?log.date_found:today()}">
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;padding-bottom:2px">
+          <button class="btn btn-primary btn-sm" onclick="saveLog('${root.id}')">Save</button>
+          ${log?`<button class="btn btn-danger" onclick="deleteLog('${root.id}')">Delete</button>`:''}
+          <button class="btn btn-secondary btn-sm" onclick="closeLog('${root.id}')">Cancel</button>
+          <span id="lmsg-${root.id}" class="log-saved"></span>
+        </div>
+      </div>
+    </td>`;
+    tbody.appendChild(logRow);
+  });
+
+  const rootCount = allRoots.filter(r=>!isMigratoryRoot(r)).length;
+  const migCount  = allRoots.filter(r=>isMigratoryRoot(r)).length;
+  const loggedRoots = Object.keys(myLogs).filter(id=>{ const r=allRoots.find(x=>x.id===id); return r&&!isMigratoryRoot(r); }).length;
+  const loggedMig   = Object.keys(myLogs).filter(id=>{ const r=allRoots.find(x=>x.id===id); return r&&isMigratoryRoot(r); }).length;
+  el('listCount').textContent = `${roots.length} shown · ${rootCount} roots (${loggedRoots} logged) · ${migCount} migratory (${loggedMig} logged)`;
+}
+
+// Opens or closes the inline log form for a given root row.
+// Closes any other open log forms first so only one is open at a time.
+function toggleLog(id) {
+  if (currentUser==='TEACHER') return;
+  const row = el('logrow-'+id);
+  const isOpen = row.style.display !== 'none';
+  document.querySelectorAll('.student-log-row').forEach(r=>r.style.display='none');
+  if (!isOpen) row.style.display='';
+}
+// Hides the inline log form for a specific root without saving.
+function closeLog(id) { el('logrow-'+id).style.display='none'; }
+
+// Saves (or updates) a student's log entry for a specific root.
+// Uses an "upsert" so editing an existing entry overwrites it rather than duplicating.
+// Requires: Your Word, Your Word's Meaning, and Found In.
+async function saveLog(id) {
+  const word    = el('lw-'+id).value.trim();
+  const def     = el('ld-'+id).value.trim();
+  const foundIn = el('lf-'+id).value.trim();
+  const dateFnd = el('ldate-'+id).value || today();
+  const msg     = el('lmsg-'+id);
+  msg.style.color = '#8a2020';
+  if (!word)    { msg.textContent = 'Please enter your word.'; return; }
+  if (!def)     { msg.textContent = 'Please enter your word\'s meaning.'; return; }
+  if (!foundIn) { msg.textContent = 'Please enter where you found it.'; return; }
+  msg.style.color='var(--green)'; msg.textContent='Saving…';
+  try {
+    const payload = { username:currentUser, root_id:id, word, definition:def, found_in:foundIn, date_found:dateFnd };
+    await fetch(SUPABASE_URL+'/rest/v1/logs', { method:'POST', headers:{...H,'Prefer':'resolution=merge-duplicates,return=representation'}, body:JSON.stringify(payload) });
+    myLogs[id] = payload;
+    msg.textContent='Saved!';
+    setTimeout(()=>{ closeLog(id); renderList(); },600);
+  } catch(e) { msg.style.color='#8a2020'; msg.textContent='Error saving.'; }
+}
+
+// Permanently removes a student's log entry for a specific root from the database.
+async function deleteLog(id) {
+  await sb(`logs?username=eq.${enc(currentUser)}&root_id=eq.${id}`, 'DELETE');
+  delete myLogs[id]; closeLog(id); renderList();
+}
+
+// Sorts the checklist by the clicked column. Clicking the same column again reverses the order.
+function sortBy(key) {
+  sortKey===key ? sortDir*=-1 : (sortKey=key, sortDir=1);
+  renderList();
+}
+
+// ============================================================
+// ADD MIGRATORY WORD
+// ============================================================
+function onMigSourceLangChange() {
+  const sl = el('migSourceLang').value;
+  el('migSourceOtherWrap').style.display = sl==='Other' ? '' : 'none';
+  // Auto-fill note prefix
+  if (sl && sl!=='Other') {
+    const note = el('migNote');
+    if (!note.value || /^[A-Za-z\/\-\s]+: $/.test(note.value)) {
+      note.value = sl + ': ';
+    }
+  }
+}
+
+async function addMigratory() {
+  const word    = el('migWord').value.trim();
+  const sl      = el('migSourceLang').value;
+  const slOther = el('migSourceOther').value.trim();
+  const srcLang = sl==='Other' ? (slOther||'Other') : sl;
+  const meaning = el('migMeaning').value.trim();
+  const note    = el('migNote').value.trim();
+  const myWord  = el('migMyWord').value.trim();
+  const myDef   = el('migMyDef').value.trim();
+  const foundIn = el('migFoundIn').value.trim();
+  const date    = el('migDate').value || today();
+  const msg     = el('addMigMsg');
+
+  if (!word || !srcLang || !meaning) { msg.style.color='#8a2020'; msg.textContent='Please fill in the word, language, and meaning.'; return; }
+
+  setBtn('addMigBtn', true, 'Checking…');
+
+  // Check for duplicate (case-insensitive)
+  const existing = allRoots.find(r => r.part.toLowerCase()===word.toLowerCase() && isMigratoryRoot(r));
+  if (existing) {
+    msg.style.color='var(--green)';
+    msg.textContent=`"${word}" already exists — opening your log for it!`;
+    setBtn('addMigBtn', false, 'Add to Field Guide');
+    // Clear form and go to list, open log row
+    clearMigForm();
+    showTab('list');
+    setTimeout(()=>{ toggleLog(existing.id); },400);
+    return;
+  }
+
+  try {
+    const id = 'r'+Date.now();
+    const newRoot = await sb('roots','POST',{
+      id, part:word, origin:'Migratory Word', meaning, example:word,
+      example_note:note, is_prefix:false, is_root:true, is_suffix:false, source_lang:srcLang
+    });
+    allRoots.push(newRoot[0]);
+    allRoots.sort((a,b)=>a.part.localeCompare(b.part));
+
+    // Auto-log for this student if they filled in their word
+    if (myWord) {
+      const payload = { username:currentUser, root_id:id, word:myWord, definition:myDef, found_in:foundIn, date_found:date };
+      await fetch(SUPABASE_URL+'/rest/v1/logs',{method:'POST',headers:{...H,'Prefer':'resolution=merge-duplicates,return=representation'},body:JSON.stringify(payload)});
+      myLogs[id] = payload;
+    }
+
+    msg.style.color='var(--green)'; msg.textContent=`"${word}" added to the Field Guide!`;
+    clearMigForm();
+    setTimeout(()=>{ msg.textContent=''; showTab('list'); },1200);
+  } catch(e) { msg.style.color='#8a2020'; msg.textContent='Error adding word.'; }
+  setBtn('addMigBtn', false, 'Add to Field Guide');
+}
+
+function clearMigForm() {
+  ['migWord','migMeaning','migNote','migMyWord','migMyDef','migFoundIn'].forEach(f=>el(f).value='');
+  el('migSourceLang').value=''; el('migSourceOther').value='';
+  el('migSourceOtherWrap').style.display='none'; el('migDate').value=today();
+}
+
+// ============================================================
+// ADD ROOT (teacher)
+// ============================================================
+function onOriginChange() {
+  const origin = el('newOrigin').value;
+  el('newSourceLangWrap').style.display = origin==='Exotics' ? '' : 'none';
+  if (origin!=='Exotics') { el('newSourceLang').value=''; el('newSourceLangOther').style.display='none'; el('newExampleNoteHint').textContent=''; }
+}
+
+function onSourceLangChange() {
+  const sl = el('newSourceLang').value;
+  el('newSourceLangOther').style.display = sl==='Other' ? '' : 'none';
+  if (sl && sl!=='Other') {
+    const note = el('newExampleNote');
+    if (!note.value || /^[A-Za-z\/\-\s]+: $/.test(note.value)) { note.value=sl+': '; note.focus(); }
+    el('newExampleNoteHint').textContent = '— start with: '+sl+': …';
+  } else { el('newExampleNoteHint').textContent=''; }
+}
+
+async function addRoot() {
+  const part    = el('newPart').value.trim();
+  const origin  = el('newOrigin').value;
+  const meaning = el('newMeaning').value.trim();
+  const example = el('newExample').value.trim();
+  const note    = el('newExampleNote').value.trim();
+  const isP     = el('newIsPrefix').checked;
+  const isR     = el('newIsRoot').checked;
+  const isS     = el('newIsSuffix').checked;
+  const msg     = el('addRootMsg');
+  let srcLang   = '';
+  if (origin==='Exotics') {
+    srcLang = el('newSourceLang').value;
+    if (srcLang==='Other') srcLang = el('newSourceLangOther').value.trim()||'Other';
+  }
+  if (!part||!origin||!meaning||!example) { msg.style.color='#8a2020'; msg.textContent='Please fill all required fields.'; return; }
+  setBtn('addRootBtn', true, 'Adding…');
+  try {
+    const id = 'r'+Date.now();
+    const newRoot = await sb('roots','POST',{id,part,origin,meaning,example,example_note:note,is_prefix:isP,is_root:isR,is_suffix:isS,source_lang:srcLang});
+    allRoots.push(newRoot[0]);
+    allRoots.sort((a,b)=>a.part.localeCompare(b.part));
+    ['newPart','newMeaning','newExample','newExampleNote'].forEach(f=>el(f).value='');
+    el('newOrigin').value=''; el('newSourceLangWrap').style.display='none';
+    el('newSourceLang').value=''; el('newSourceLangOther').style.display='none'; el('newSourceLangOther').value='';
+    el('newExampleNoteHint').textContent='';
+    ['newIsPrefix','newIsRoot','newIsSuffix'].forEach(f=>el(f).checked=false);
+    msg.style.color='var(--green)'; msg.textContent=`"${part}" added!`;
+    setTimeout(()=>{ msg.textContent=''; },2000);
+    renderRootManager();
+  } catch(e) { msg.style.color='#8a2020'; msg.textContent='Error adding root.'; }
+  setBtn('addRootBtn', false, 'Add to Field Guide');
+}
+
+function renderRootManager() {
+  const container = el('rootManagerList');
+  if (!container) return;
+  container.innerHTML = allRoots.map(r=>`
+    <div class="root-manager-row">
+      <span class="root-id">${esc(r.part)}</span>
+      <span class="muted">${esc(r.origin)}</span>
+      <span style="flex:1;font-size:0.8rem">${esc(r.meaning)}</span>
+      <button class="btn btn-danger" onclick="deleteRoot('${r.id}')">Remove</button>
+    </div>`).join('');
+}
+
+async function deleteRoot(id) {
+  if (!confirm('Remove this root from the master list? All student logs for it will also be deleted.')) return;
+  await sb(`roots?id=eq.${id}`, 'DELETE');
+  allRoots = allRoots.filter(r=>r.id!==id);
+  renderRootManager();
+}
+
+// ============================================================
+// SCOREBOARD
+// ============================================================
+async function renderScoreboard() {
+  showLoading('Tallying field notes…');
+  const [users, logs] = await Promise.all([
+    sb('users?select=username&order=username.asc'),
+    sb('logs?select=username,root_id')
+  ]);
+  hideLoading();
+
+  const rootIds = new Set(allRoots.filter(r=>!isMigratoryRoot(r)).map(r=>r.id));
+  const migIds  = new Set(allRoots.filter(r=>isMigratoryRoot(r)).map(r=>r.id));
+
+  const scores = (users||[]).map(u => {
+    const uLogs = (logs||[]).filter(l=>l.username===u.username);
+    const roots = uLogs.filter(l=>rootIds.has(l.root_id)).length;
+    const migs  = uLogs.filter(l=>migIds.has(l.root_id)).length;
+    return { username:u.username, roots, migs, total:roots+migs };
+  }).sort((a,b)=>b.total-a.total||b.roots-a.roots);
+
+  el('scoreboardCount').textContent = scores.length+' naturalists';
+
+  const medals = ['🥇','🥈','🥉'];
+  el('scoreboardBody').innerHTML = scores.map((s,i)=>`
+    <tr class="${s.username===currentUser?'me':''} rank-${i+1}">
+      <td class="rank-num">${medals[i]||''} ${i+1}</td>
+      <td>${esc(s.username)}${s.username===currentUser?' ★':''}</td>
+      <td class="num">${s.roots}</td>
+      <td class="num">${s.migs}</td>
+      <td class="num" style="font-weight:600">${s.total}</td>
+    </tr>`).join('') || '<tr><td colspan="5" class="no-entries">No students yet.</td></tr>';
+}
+
+// ============================================================
+// TEACHER VIEW
+// ============================================================
+// Loads and displays all student accounts in the teacher dashboard.
+// Also checks whether the default password is still in use and shows a warning if so.
+async function renderTeacher() {
+  showLoading('Loading student data…');
+  const [users, logs, settings] = await Promise.all([
+    sb('users?select=username,created_at&order=username.asc'),
+    sb('logs?select=*'),
+    sb('settings?key=eq.teacher_pwd&select=value')
+  ]);
+  hideLoading();
+
+  // Show warning banner if still using the default password (stored as hash)
+  const DEFAULT_HASH = 'bb03304f366bc27d6ca9f3e14b5d1f67dc94d123c519ca81b58aa1226a6ee224';
+  const currentPwd = settings && settings[0] ? settings[0].value : '';
+  const isDefault = currentPwd === DEFAULT_HASH || currentPwd === 'pleasechangethis';
+  el('defaultPwdWarning').style.display = isDefault ? '' : 'none';
+
+  el('studentCount').textContent = (users||[]).length+' students';
+
+  const grid = el('teacherGrid');
+  if (!users||!users.length) { grid.innerHTML='<p class="no-entries">No students registered yet.</p>'; return; }
+
+  grid.innerHTML = users.map(u=>{
+    const uLogs = (logs||[]).filter(l=>l.username===u.username);
+    const recent = uLogs.slice(-4).reverse().map(l=>{
+      const root = allRoots.find(r=>r.id===l.root_id);
+      return `<div class="log-entry"><strong>${esc(root?root.part:'?')}</strong> → ${esc(l.word||'')} <span class="muted">${esc(l.found_in||'')}</span></div>`;
+    }).join('');
+    return `
+    <div class="student-card">
+      <h3>${esc(u.username)}</h3>
+      <div class="stats">${uLogs.length} entry${uLogs.length!==1?'s':''} logged</div>
+      <div class="student-logs-list">${recent||'<span class="muted" style="font-style:italic">No entries yet</span>'}</div>
+      <div class="reset-area">
+        <input type="text" id="pin-${u.username}" placeholder="New PIN" maxlength="4">
+        <button class="btn btn-secondary btn-sm" onclick="resetPin('${u.username}')">Reset PIN</button>
+        <button class="btn btn-danger" onclick="deleteStudent('${u.username}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function resetPin(username) {
+  const newPin = el('pin-'+username).value.trim();
+  if (!/^\d{4}$/.test(newPin)) { alert('PIN must be exactly 4 digits.'); return; }
+  if (!validPin(newPin)) { alert('PIN cannot have more than one repeated digit.'); return; }
+  await sb(`users?username=eq.${enc(username)}`, 'PATCH', { pin:newPin });
+  el('pin-'+username).value='';
+  alert(`PIN for ${username} updated.`);
+}
+
+async function deleteStudent(username) {
+  if (!confirm(`Delete "${username}" and all their logs? This cannot be undone.`)) return;
+  await sb(`users?username=eq.${enc(username)}`, 'DELETE');
+  renderTeacher();
+}
+
+// Validates and saves a new teacher password.
+// Rules: min 12 chars, cannot contain "please"/"change"/"this", cannot be the default.
+// Password is hashed with SHA-256 before being stored — never saved as plain text.
+async function changeTeacherPwd() {
+  const newPwd = el('newTeacherPwd').value.trim();
+  const msg    = el('pwdMsg');
+  msg.style.color = '#8a2020';
+  if (!newPwd) { msg.textContent = 'Please enter a new password.'; return; }
+  if (newPwd.length < 12) { msg.textContent = 'Password must be at least 12 characters.'; return; }
+  const lower = newPwd.toLowerCase();
+  if (lower === 'pleasechangethis') { msg.textContent = 'Please choose a real password.'; return; }
+  if (lower.includes('please') || lower.includes('change') || lower.includes('this')) {
+    msg.textContent = 'Password cannot contain "please", "change", or "this".'; return;
+  }
+  const hashed = await hashPassword(newPwd);
+  await sb('settings?key=eq.teacher_pwd', 'PATCH', { value: hashed });
+  el('newTeacherPwd').value='';
+  el('defaultPwdWarning').style.display = 'none';
+  msg.style.color = 'var(--green)';
+  msg.textContent = 'Password updated!';
+  setTimeout(()=>{ msg.textContent=''; },2000);
+}
+
+async function doWipe() {
+  const confirm_val = el('wipeConfirm').value.trim().toLowerCase();
+  if (confirm_val !== 'teacher') {
+    el('wipeMsg').style.color='#8a2020';
+    el('wipeMsg').textContent='Type "teacher" to confirm.';
+    return;
+  }
+  if (!confirm('Last chance — this will delete ALL student accounts and logs. Roots are safe. Continue?')) return;
+  showLoading('Resetting database…');
+  try {
+    // Delete all logs first (FK constraint), then users
+    await sb('logs?id=neq.00000000-0000-0000-0000-000000000000', 'DELETE');
+    await sb('users?username=neq.__placeholder__', 'DELETE');
+    el('wipeConfirm').value='';
+    el('wipeMsg').style.color='var(--green)';
+    el('wipeMsg').textContent='Reset complete. Ready for a new year!';
+    hideLoading();
+    renderTeacher();
+  } catch(e) {
+    hideLoading();
+    el('wipeMsg').style.color='#8a2020';
+    el('wipeMsg').textContent='Error during reset. Try again.';
+  }
+}
+
+// ============================================================
+// EXPORT CSV
+// ============================================================
+function exportMyCSV() {
+  if (currentUser==='TEACHER') { alert('Switch to a student account to download a personal list.'); return; }
+  const rows = [['Root/Word','Origin','Source Language','Type','Meaning','Teacher Example','Your Word','Your Definition','Found In','Date Found']];
+  allRoots.forEach(r=>{
+    const log = myLogs[r.id];
+    const type = isMigratoryRoot(r) ? 'Migratory Word' : [r.is_prefix?'Prefix':null,r.is_root?'Root':null,r.is_suffix?'Suffix':null].filter(Boolean).join('+');
+    rows.push([r.part, r.origin, r.source_lang||'', type, r.meaning, r.example||'', log?log.word||'':'', log?log.definition||'':'', log?log.found_in||'':'', log?log.date_found||'':'']);
+  });
+  downloadCSV(rows, `word-roots-${currentUser}.csv`);
+}
+
+async function exportAllCSV() {
+  showLoading('Preparing export…');
+  const [users, logs] = await Promise.all([
+    sb('users?select=username'), sb('logs?select=*')
+  ]);
+  hideLoading();
+  const rows = [['Student','Root/Word','Origin','Source Language','Type','Meaning','Teacher Example','Their Word','Their Definition','Found In','Date Found']];
+  (users||[]).forEach(u=>{
+    const uLogs = (logs||[]).filter(l=>l.username===u.username);
+    if (!uLogs.length) {
+      rows.push([u.username,'','','','','','','','','','']);
+    } else {
+      uLogs.forEach(log=>{
+        const r = allRoots.find(x=>x.id===log.root_id);
+        const type = r ? (isMigratoryRoot(r)?'Migratory Word':[r.is_prefix?'Prefix':null,r.is_root?'Root':null,r.is_suffix?'Suffix':null].filter(Boolean).join('+')) : '';
+        rows.push([u.username, r?r.part:'?', r?r.origin:'', r?r.source_lang||'':'', type, r?r.meaning:'', r?r.example||'':'', log.word||'', log.definition||'', log.found_in||'', log.date_found||'']);
+      });
+    }
+  });
+  downloadCSV(rows, 'word-roots-all-students.csv');
+}
+
+function downloadCSV(rows, filename) {
+  const csv = rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+}
+
+// ============================================================
+// SEED
+// ============================================================
+async function seedRoots() {
+  const roots = getDefaultRoots();
+  for (let i=0; i<roots.length; i+=20) await sb('roots','POST',roots.slice(i,i+20));
+  allRoots = await sb('roots?select=*&order=part.asc') || [];
+}
+
+function getDefaultRoots() {
+  const r=(id,part,origin,meaning,example,example_note,is_prefix,is_root,is_suffix,source_lang='')=>
+    ({id,part,origin,meaning,example,example_note,is_prefix,is_root,is_suffix,source_lang});
+  return [
+    // Greek
+    r('r001','astro-','Greek','star','astronaut','astro (star) + naut (sailor) = sailor of the stars',true,true,false),
+    r('r002','auto-','Greek','self','autobiography','auto (self) + bio (life) + graphy = writing one\'s own life',true,false,false),
+    r('r003','bio-','Greek','life','biography','bio (life) + graphy (writing) = a written life story',true,true,false),
+    r('r004','chron-','Greek','time','chronology','chron (time) + logy = the sequence of events in time',false,true,false),
+    r('r005','dem-','Greek','people','democracy','demo (people) + cracy (rule) = rule by the people',false,true,false),
+    r('r006','geo-','Greek','earth','geology','geo (earth) + logy (study of) = study of the earth',true,true,false),
+    r('r007','graph-','Greek','to write','photograph','photo (light) + graph (to write) = writing with light',false,true,false),
+    r('r008','hydro-','Greek','water','hydroplane','hydro (water) + plane = to glide on water',true,true,false),
+    r('r009','macro-','Greek','large, long','macrocosm','macro (large) + cosm (world) = the large-scale universe',true,false,false),
+    r('r010','micro-','Greek','small','microscope','micro (small) + scope (to see) = instrument to see small things',true,false,false),
+    r('r011','path-','Greek','feeling, suffering','empathy','em (in) + pathy (feeling) = feeling into another\'s experience',false,true,false),
+    r('r012','phil-','Greek','love','philosophy','phil (love) + sophy (wisdom) = love of wisdom',true,true,false),
+    r('r013','-phone','Greek','sound, voice','microphone','micro (small) + phone (sound) = amplifies small sounds',false,true,true),
+    r('r014','phon-','Greek','sound','phonics','phon (sound) = relating to sounds in language',false,true,false),
+    r('r015','poly-','Greek','many','polygon','poly (many) + gon (angle) = shape with many angles',true,false,false),
+    r('r016','psych-','Greek','mind, soul','psychology','psych (mind) + ology = study of the mind',false,true,false),
+    r('r017','-scope','Greek','instrument for viewing','telescope','tele (far) + scope = instrument for viewing far away',false,false,true),
+    r('r018','tele-','Greek','far, distant','telephone','tele (far) + phone (sound) = sound from far away',true,false,false),
+    r('r019','therm-','Greek','heat','thermometer','therm (heat) + meter (measure) = instrument measuring heat',false,true,false),
+    r('r020','-logy','Greek','study of','biology','bio (life) + logy = study of life',false,false,true),
+    // Latin
+    r('r021','aqua-','Latin','water','aquarium','aqua (water) + arium = container of water',true,true,false),
+    r('r022','aud-','Latin','to hear','auditorium','aud (hear) + ium = a place for hearing',false,true,false),
+    r('r023','bene-','Latin','good, well','benefit','bene (good) + fit = something good that comes to you',true,false,false),
+    r('r024','capit-','Latin','head','captain','capit (head) = one who leads, at the head',false,true,false),
+    r('r025','corp-','Latin','body','corporation','corp (body) = a body of people acting as one',false,true,false),
+    r('r026','dict-','Latin','to say, to speak','dictate','dict (say) = to speak aloud for someone to write',false,true,false),
+    r('r027','duc-','Latin','to lead','educate','e (out) + duc (lead) + ate = to lead out knowledge',false,true,false),
+    r('r028','mal-','Latin','bad, evil','malice','mal (bad) + ice = ill will toward others',true,false,false),
+    r('r029','man-','Latin','hand','manuscript','manu (hand) + script (written) = written by hand',false,true,false),
+    r('r030','mit-','Latin','to send','transmit','trans (across) + mit (send) = to send across',false,true,false),
+    r('r031','omni-','Latin','all','omnivore','omni (all) + vore (eat) = one who eats everything',true,false,false),
+    r('r032','port-','Latin','to carry','transport','trans (across) + port (carry) = to carry across',false,true,false),
+    r('r033','rupt-','Latin','to break','interrupt','inter (between) + rupt (break) = to break between',false,true,false),
+    r('r034','scrib-','Latin','to write','scribble','scrib (write) = to write carelessly',false,true,false),
+    r('r035','spec-','Latin','to look, to see','spectator','spec (look) + ator = one who looks on',false,true,false),
+    r('r036','terra-','Latin','earth, land','territory','terra (land) + ory = an area of land',false,true,false),
+    r('r037','-tion','Latin','action, state of','creation','create + tion = the act of creating',false,false,true),
+    r('r038','trans-','Latin','across, beyond','transport','trans (across) + port (carry) = carry across',true,false,false),
+    r('r039','vert-','Latin','to turn','convert','con (together) + vert (turn) = to turn or change',false,true,false),
+    r('r040','vis-','Latin','to see','visible','vis (see) + ible = able to be seen',false,true,false),
+    // Old English / Anglo-Saxon
+    r('r041','-dom','Old English/Anglo-Saxon','domain, state of being','freedom','free + dom = the state of being free',false,false,true),
+    r('r042','for-','Old English/Anglo-Saxon','completely; away','forbid','for + bid = to bid away, to command not to',true,false,false),
+    r('r043','-ful','Old English/Anglo-Saxon','full of, characterized by','joyful','joy + ful = full of joy',false,false,true),
+    r('r044','-less','Old English/Anglo-Saxon','without','hopeless','hope + less = without hope',false,false,true),
+    r('r045','-ly','Old English/Anglo-Saxon','in a manner of','quickly','quick + ly = in a quick manner',false,false,true),
+    r('r046','mis-','Old English/Anglo-Saxon','wrongly, badly','mistake','mis (wrongly) + take = to take wrongly',true,false,false),
+    r('r047','-ness','Old English/Anglo-Saxon','state or quality of','kindness','kind + ness = the quality of being kind',false,false,true),
+    r('r048','out-','Old English/Anglo-Saxon','beyond, surpassing','outrun','out (beyond) + run = to run beyond someone',true,false,false),
+    r('r049','over-','Old English/Anglo-Saxon','above, too much','overlook','over (above) + look = to look over or miss',true,false,false),
+    r('r050','-ship','Old English/Anglo-Saxon','state, condition, skill','friendship','friend + ship = the condition of being friends',false,false,true),
+    // German
+    r('r051','über-','German','over, above, super','übercool','über (above/super) = extremely or surpassing in quality',true,false,false),
+    r('r052','Welt-','German','world','Weltanschauung','Welt (world) + Anschauung (view) = world-view or philosophy',false,true,false),
+    // Norse
+    r('r053','-by','Norse','farm, settlement','Grimsby','Grims + by (settlement) = Grim\'s settlement (place names)',false,false,true),
+    r('r054','sk-','Norse','indicates Norse origin','sky, skill, skirt','Many English sk- words come from Norse',false,true,false),
+    r('r055','thrall','Norse','enslaved person, captive','enthralled','thrall = slave; enthralled = captivated as if bound',false,true,false),
+    // French
+    r('r056','-ance','French','quality or state of','elegance','elegan(t) + ance = the quality of being elegant',false,false,true),
+    r('r057','beau-','French','beautiful','beauty','beau (beautiful) = the state of being beautiful',false,true,false),
+    r('r058','en-','French','to put into, to make','encourage','en (into) + courage = to put courage into someone',true,false,false),
+    r('r059','-ment','French','action, result','movement','move + ment = the act or result of moving',false,false,true),
+    r('r060','-ous','French','having the quality of','famous','fam(e) + ous = having fame',false,false,true),
+    // Italian
+    r('r061','bel-','Italian','beautiful','belladonna','bella (beautiful) + donna (lady) = beautiful lady',false,true,false),
+    r('r062','-etto','Italian','small (diminutive)','falsetto','false + etto (small) = a lighter voice above normal range',false,false,true),
+    // Arabic
+    r('r063','al-','Arabic','the (definite article)','algebra','al (the) + jabr (reunion) = algebra',true,false,false),
+    r('r064','sifr','Arabic','zero, empty','cipher','sifr (zero/empty) → cipher = a secret code or zero',false,true,false),
+    // Hebrew
+    r('r065','amen','Hebrew','so be it, truly','amen','amen = affirmation used in prayer across many traditions',false,true,false),
+    r('r066','shalom','Hebrew','peace, wholeness','shalom','shalom = peace; used as greeting and farewell',false,true,false),
+    // Sanskrit/Hindi
+    r('r067','jungul','Sanskrit/Hindi','wilderness','jungle','jangal (wilderness) → jungle = dense wild vegetation',false,true,false),
+    r('r068','yoga','Sanskrit/Hindi','union, to yoke','yoga','yoga (union) = a practice uniting mind and body',false,true,false),
+    // Japanese
+    r('r069','kara-','Japanese','empty','karaoke','kara (empty) + oke (orchestra) = singing over a recorded track',false,true,false),
+    // Migratory Words
+    r('r070','cliché','Migratory Word','overused phrase or expression','cliché','French printing term: a plate that printed the same image repeatedly','','','','French'),
+    r('r071','faux pas','Migratory Word','a social blunder or misstep','faux pas','French: faux (false) + pas (step) = a false step','','','','French'),
+    r('r072','je ne sais quoi','Migratory Word','an indefinable, attractive quality','je ne sais quoi','French: "I don\'t know what" — used whole in English','','','','French'),
+    r('r073','karma','Migratory Word','actions and their consequences across time','karma','Sanskrit: karma (action, deed) = the sum of one\'s actions affecting future','','','','Sanskrit/Hindi'),
+    r('r074','karaoke','Migratory Word','singing along to recorded music','karaoke','Japanese: kara (empty) + oke (orchestra) = empty orchestra','','','','Japanese'),
+    r('r075','schadenfreude','Migratory Word','pleasure derived from others\' misfortune','schadenfreude','German: Schaden (damage) + Freude (joy)','','','','German'),
+    r('r076','taboo','Migratory Word','a social or cultural prohibition','taboo','Tongan: tapu (sacred/forbidden) — entered English through Polynesian','','','','Exotics'),
+    r('r077','tsunami','Migratory Word','a large ocean wave caused by an earthquake','tsunami','Japanese: tsu (harbor) + nami (wave) = a great harbor wave','','','','Japanese'),
+    r('r078','zeitgeist','Migratory Word','the spirit or mood of a particular time period','zeitgeist','German: Zeit (time) + Geist (spirit) = spirit of the times','','','','German'),
+    r('r079','emoji','Migratory Word','a small digital image used to express emotion','emoji','Japanese: e (picture) + moji (character) = picture character','','','','Japanese'),
+    r('r080','angst','Migratory Word','a feeling of deep anxiety or dread','angst','German: Angst (fear, anxiety) — used whole in English','','','','German'),
+  ];
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+function el(id) { return document.getElementById(id); }
+function enc(s) { return encodeURIComponent(s); }
+function today() { return new Date().toISOString().split('T')[0]; }
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function showLoading(msg) { el('loadingMsg').textContent=msg||'Loading…'; el('loadingOverlay').style.display='flex'; }
+function hideLoading() { el('loadingOverlay').style.display='none'; }
+function setBtn(id, disabled, label) { const b=el(id); if(b){ b.disabled=disabled; b.textContent=label; } }
+function done(id, label) { hideLoading(); setBtn(id, false, label); }
+
+// ============================================================
+// GO
+// ============================================================
+boot();
+</script>
+</body>
+</html>

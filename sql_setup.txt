@@ -1,0 +1,49 @@
+-- Settings table (stores teacher password)
+create table settings (
+  key text primary key,
+  value text
+);
+insert into settings (key, value) values ('teacher_pwd', 'LittleGoldenBook699');
+
+-- Roots table (the master word part list)
+create table roots (
+  id text primary key,
+  part text not null,
+  origin text not null,
+  meaning text not null,
+  example text not null,
+  example_note text,
+  is_prefix boolean default false,
+  is_root boolean default false,
+  is_suffix boolean default false,
+  source_lang text,
+  created_at timestamptz default now()
+);
+
+-- Users table (students)
+create table users (
+  username text primary key,
+  pin text not null,
+  created_at timestamptz default now()
+);
+
+-- Logs table (student word finds)
+create table logs (
+  id uuid primary key default gen_random_uuid(),
+  username text references users(username) on delete cascade,
+  root_id text references roots(id) on delete cascade,
+  word text,
+  definition text,
+  found_in text,
+  date_found text,
+  source_lang text,
+  source_lang_other text,
+  created_at timestamptz default now(),
+  unique(username, root_id)
+);
+
+-- Disable RLS for all tables (app handles auth)
+alter table settings disable row level security;
+alter table roots disable row level security;
+alter table users disable row level security;
+alter table logs disable row level security;
